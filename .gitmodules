@@ -1,0 +1,6 @@
+[submodule "libs/mach-glfw"]
+	path = libs/mach-glfw
+	url = git@github.com:hexops/mach-glfw.git
+[submodule "libs/mach-gpu-dawn"]
+	path = libs/mach-gpu-dawn
+	url = git@github.com:hexops/mach-gpu-dawn.git
