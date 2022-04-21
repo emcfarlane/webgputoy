@@ -3,8 +3,8 @@ const utils = @import("utils.zig");
 const c = @import("c.zig").c;
 const glfw = @import("glfw");
 
-const blitVert = @embedFile("shaders/preview_vert.wgsl");
-const blitFrag = @embedFile("shaders/preview_tmpl.wgsl");
+const vertWGSL = @embedFile("shaders/vert.wgsl");
+const fragWGSL = @embedFile("shaders/frag.wgsl");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -13,6 +13,20 @@ pub fn main() !void {
     const setup = try utils.setup(allocator);
     const queue = c.wgpuDeviceGetQueue(setup.device);
     const framebuffer_size = try setup.window.getFramebufferSize();
+    const start_time = std.time.milliTimestamp();
+
+    // READ FILE
+    var arg_it = std.process.args();
+    _ = arg_it.skip();
+    const shader_path = arg_it.next() orelse "examples/colours.wgsl";
+    std.debug.print("Loading: {s}.\n", .{shader_path});
+    const shader_src = try utils.read_file(allocator, shader_path);
+
+    const full_src = try allocator.alloc(u8, fragWGSL.len + shader_src.len + 1); // null terminate
+    std.mem.copy(u8, full_src, fragWGSL);
+    std.mem.copy(u8, full_src[fragWGSL.len..], shader_src);
+    defer allocator.free(full_src);
+    //
 
     const window_data = try allocator.create(WindowData);
     window_data.* = .{
@@ -79,7 +93,7 @@ pub fn main() !void {
     //    \\     return vec4<f32>(pos[VertexIndex], 0.0, 1.0);
     //    \\ }
     //;
-    const vs = blitVert;
+    const vs = vertWGSL;
     var vs_wgsl_descriptor = try allocator.create(c.WGPUShaderModuleWGSLDescriptor);
     vs_wgsl_descriptor.chain.next = null;
     vs_wgsl_descriptor.chain.sType = c.WGPUSType_ShaderModuleWGSLDescriptor;
@@ -95,7 +109,9 @@ pub fn main() !void {
     //    \\     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
     //    \\ }
     //;
-    const fs = blitFrag;
+    std.debug.print("WAHT {s} {}\n", .{ full_src, full_src.len });
+    full_src[full_src.len - 1] = 0;
+    const fs = full_src[0 .. full_src.len - 1 :0]; //fragWGSL;
     var fs_wgsl_descriptor = try allocator.create(c.WGPUShaderModuleWGSLDescriptor);
     fs_wgsl_descriptor.chain.next = null;
     fs_wgsl_descriptor.chain.sType = c.WGPUSType_ShaderModuleWGSLDescriptor;
@@ -121,7 +137,6 @@ pub fn main() !void {
         },
     );
     defer c.wgpuBufferRelease(uniform_buffer);
-    std.debug.print("uniform buffer: {}", .{uniform_buffer});
 
     const bind_group_layout_entries = [_]c.WGPUBindGroupLayoutEntry{
         (c.WGPUBindGroupLayoutEntry){
@@ -138,6 +153,8 @@ pub fn main() !void {
             .texture = undefined,
             .storageTexture = undefined,
         },
+
+        // ??? Sampler
     };
     const bind_group_layout = c.wgpuDeviceCreateBindGroupLayout(
         setup.device,
@@ -279,6 +296,47 @@ pub fn main() !void {
         }
     }).callback);
 
+    // ---
+    //const tex_size = (c.WGPUExtent3D){
+    //    .width = framebuffer_size.width,
+    //    .height = framebuffer_size.height,
+    //    .depthOrArrayLayers = 1,
+    //};
+    //const tex = c.wgpuDeviceCreateTexture(
+    //    setup.device,
+    //    &(c.WGPUTextureDescriptor){
+    //        .nextInChain = null,
+    //        .label = "preview_tex",
+    //        .usage = (c.WGPUTextureUsage_RenderAttachment | c.WGPUTextureUsage_CopySrc),
+    //        .dimension = c.WGPUTextureDimension_2D,
+    //        .size = tex_size,
+    //        .format = c.WGPUTextureFormat_BGRA8Unorm,
+    //        .mipLevelCount = 1,
+    //        .sampleCount = 1,
+    //        .viewFormatCount = 0,
+    //        .viewFormats = null,
+    //    },
+    //);
+    //defer c.wgpuTextureRelease(tex);
+
+    //const view = c.wgpuTextureCreateView(
+    //    tex,
+    //    &(c.WGPUTextureViewDescriptor){
+    //        .nextInChain = null,
+    //        .label = "preview_tex_view",
+    //        .format = c.WGPUTextureFormat_BGRA8Unorm,
+    //        .dimension = c.WGPUTextureViewDimension_2D,
+    //        .baseMipLevel = 0,
+    //        .mipLevelCount = 1,
+    //        .baseArrayLayer = 0,
+    //        .arrayLayerCount = 1,
+    //        .aspect = c.WGPUTextureAspect_All,
+    //    },
+    //);
+    //defer c.wgpuTextureViewRelease(view);
+
+    // ---
+
     while (!setup.window.shouldClose()) {
         try frame(.{
             .window = setup.window,
@@ -286,8 +344,11 @@ pub fn main() !void {
             .pipeline = pipeline,
             .queue = queue,
             .bind_group = bind_group,
+            .start_time = start_time,
+            .uniform_buffer = uniform_buffer,
         });
-        std.time.sleep(16 * std.time.ns_per_ms);
+        //std.time.sleep(16 * std.time.ns_per_ms);
+        std.time.sleep(100 * std.time.ns_per_ms);
     }
 }
 
@@ -305,6 +366,8 @@ const FrameParams = struct {
     pipeline: c.WGPURenderPipeline,
     queue: c.WGPUQueue,
     bind_group: c.WGPUBindGroup,
+    start_time: i64,
+    uniform_buffer: c.WGPUBuffer,
 };
 
 fn isDescriptorEqual(a: c.WGPUSwapChainDescriptor, b: c.WGPUSwapChainDescriptor) bool {
@@ -346,10 +409,26 @@ fn frame(params: FrameParams) !void {
         params.device,
         &(c.WGPUCommandEncoderDescriptor){ .nextInChain = null, .label = "preview encoder" },
     );
+    // Set the time in the uniforms array
+    const time_ms = std.time.milliTimestamp() - params.start_time;
+    var uniforms = (c.fpPreviewUniforms){
+        .iResolution = .{ .x = @intToFloat(f32, pl.target_desc.width), .y = @intToFloat(f32, pl.target_desc.height), .z = 0 },
+        .iTime = @intToFloat(f32, time_ms) / 1000.0,
+        .iMouse = .{ .x = 0, .y = 0, .z = 0, .w = 0 },
+        ._tiles_per_side = 1, // TODO
+        ._tile_num = 0, // TODO
+    };
+    c.wgpuQueueWriteBuffer(
+        params.queue,
+        params.uniform_buffer,
+        0,
+        @ptrCast([*c]const u8, &uniforms),
+        @sizeOf(c.fpPreviewUniforms),
+    );
     const pass = c.wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_info);
     c.wgpuRenderPassEncoderSetPipeline(pass, params.pipeline);
     c.wgpuRenderPassEncoderSetBindGroup(pass, 0, params.bind_group, 0, 0); // BIND GROUP
-    c.wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    c.wgpuRenderPassEncoderDraw(pass, 6, 1, 0, 0);
     c.wgpuRenderPassEncoderEnd(pass);
     c.wgpuRenderPassEncoderRelease(pass);
 
