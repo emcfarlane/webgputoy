@@ -3,6 +3,9 @@ const utils = @import("utils.zig");
 const c = @import("c.zig").c;
 const glfw = @import("glfw");
 
+const blitVert = @embedFile("shaders/preview_vert.wgsl");
+const blitFrag = @embedFile("shaders/preview_tmpl.wgsl");
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
@@ -26,6 +29,7 @@ pub fn main() !void {
     const use_legacy_api = setup.backend_type == c.WGPUBackendType_OpenGL or setup.backend_type == c.WGPUBackendType_OpenGLES;
     var descriptor: c.WGPUSwapChainDescriptor = undefined;
     if (!use_legacy_api) {
+        std.debug.print("using legacy OpenGL API\n", .{});
         window_data.swap_chain_format = c.WGPUTextureFormat_BGRA8Unorm;
         descriptor = c.WGPUSwapChainDescriptor{
             .nextInChain = null,
@@ -63,18 +67,19 @@ pub fn main() !void {
     window_data.current_desc = descriptor;
     window_data.target_desc = descriptor;
 
-    const vs =
-        \\ @stage(vertex) fn main(
-        \\     @builtin(vertex_index) VertexIndex : u32
-        \\ ) -> @builtin(position) vec4<f32> {
-        \\     var pos = array<vec2<f32>, 3>(
-        \\         vec2<f32>( 0.0,  0.5),
-        \\         vec2<f32>(-0.5, -0.5),
-        \\         vec2<f32>( 0.5, -0.5)
-        \\     );
-        \\     return vec4<f32>(pos[VertexIndex], 0.0, 1.0);
-        \\ }
-    ;
+    //const vs =
+    //    \\ @stage(vertex) fn main(
+    //    \\     @builtin(vertex_index) VertexIndex : u32
+    //    \\ ) -> @builtin(position) vec4<f32> {
+    //    \\     var pos = array<vec2<f32>, 3>(
+    //    \\         vec2<f32>( 0.0,  0.5),
+    //    \\         vec2<f32>(-0.5, -0.5),
+    //    \\         vec2<f32>( 0.5, -0.5)
+    //    \\     );
+    //    \\     return vec4<f32>(pos[VertexIndex], 0.0, 1.0);
+    //    \\ }
+    //;
+    const vs = blitVert;
     var vs_wgsl_descriptor = try allocator.create(c.WGPUShaderModuleWGSLDescriptor);
     vs_wgsl_descriptor.chain.next = null;
     vs_wgsl_descriptor.chain.sType = c.WGPUSType_ShaderModuleWGSLDescriptor;
@@ -85,11 +90,12 @@ pub fn main() !void {
     };
     const vs_module = c.wgpuDeviceCreateShaderModule(setup.device, &vs_shader_descriptor);
 
-    const fs =
-        \\ @stage(fragment) fn main() -> @location(0) vec4<f32> {
-        \\     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
-        \\ }
-    ;
+    //const fs =
+    //    \\ @stage(fragment) fn main() -> @location(0) vec4<f32> {
+    //    \\     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    //    \\ }
+    //;
+    const fs = blitFrag;
     var fs_wgsl_descriptor = try allocator.create(c.WGPUShaderModuleWGSLDescriptor);
     fs_wgsl_descriptor.chain.next = null;
     fs_wgsl_descriptor.chain.sType = c.WGPUSType_ShaderModuleWGSLDescriptor;
@@ -99,6 +105,90 @@ pub fn main() !void {
         .label = "my fragment shader",
     };
     const fs_module = c.wgpuDeviceCreateShaderModule(setup.device, &fs_shader_descriptor);
+
+    // ---
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Uniform buffers
+    const uniform_buffer = c.wgpuDeviceCreateBuffer(
+        setup.device,
+        &(c.WGPUBufferDescriptor){
+            .nextInChain = null,
+            .label = "Uniforms",
+            .size = @sizeOf(c.fpPreviewUniforms),
+            .usage = c.WGPUBufferUsage_Uniform | c.WGPUBufferUsage_CopyDst,
+            .mappedAtCreation = false,
+        },
+    );
+    defer c.wgpuBufferRelease(uniform_buffer);
+    std.debug.print("uniform buffer: {}", .{uniform_buffer});
+
+    const bind_group_layout_entries = [_]c.WGPUBindGroupLayoutEntry{
+        (c.WGPUBindGroupLayoutEntry){
+            .nextInChain = null,
+            .binding = 0,
+            .visibility = c.WGPUShaderStage_Vertex | c.WGPUShaderStage_Fragment,
+            .buffer = (c.WGPUBufferBindingLayout){
+                .nextInChain = null,
+                .type = c.WGPUBufferBindingType_Uniform,
+                .hasDynamicOffset = false,
+                .minBindingSize = 0,
+            },
+            .sampler = undefined,
+            .texture = undefined,
+            .storageTexture = undefined,
+        },
+    };
+    const bind_group_layout = c.wgpuDeviceCreateBindGroupLayout(
+        setup.device,
+        &(c.WGPUBindGroupLayoutDescriptor){
+            .nextInChain = null,
+            .label = "bind group layout",
+            .entryCount = bind_group_layout_entries.len,
+            .entries = &bind_group_layout_entries,
+        },
+    );
+    defer c.wgpuBindGroupLayoutRelease(bind_group_layout);
+
+    const bind_group_entries = [_]c.WGPUBindGroupEntry{
+        (c.WGPUBindGroupEntry){
+            .nextInChain = null,
+            .binding = 0,
+            .buffer = uniform_buffer,
+            .offset = 0,
+            .size = @sizeOf(c.fpPreviewUniforms),
+            .sampler = null, // None
+            .textureView = null, // None
+        },
+    };
+    const bind_group = c.wgpuDeviceCreateBindGroup(
+        setup.device,
+        &(c.WGPUBindGroupDescriptor){
+            .nextInChain = null,
+            .label = "bind group",
+            .layout = bind_group_layout,
+            .entryCount = bind_group_entries.len,
+            .entries = &bind_group_entries,
+        },
+    );
+    defer c.wgpuBindGroupRelease(bind_group);
+
+    const bind_group_layouts = [_]c.WGPUBindGroupLayout{bind_group_layout};
+
+    const pipeline_layout = c.wgpuDeviceCreatePipelineLayout(
+        setup.device,
+        &(c.WGPUPipelineLayoutDescriptor){
+            .nextInChain = null,
+            .label = "my pipeline layout",
+            .bindGroupLayoutCount = bind_group_layouts.len,
+            .bindGroupLayouts = &bind_group_layouts,
+        },
+    );
+    defer c.wgpuPipelineLayoutRelease(pipeline_layout);
+
+    //
+    // ---
+    //
 
     // Fragment state
     var blend = std.mem.zeroes(c.WGPUBlendState);
@@ -120,28 +210,61 @@ pub fn main() !void {
     fragment.targetCount = 1;
     fragment.targets = &color_target;
 
-    var pipeline_descriptor = std.mem.zeroes(c.WGPURenderPipelineDescriptor);
-    pipeline_descriptor.fragment = &fragment;
+    //var pipeline_descriptor = std.mem.zeroes(c.WGPURenderPipelineDescriptor);
+    //pipeline_descriptor.fragment = &fragment;
 
-    // Other state
-    pipeline_descriptor.layout = null;
-    pipeline_descriptor.depthStencil = null;
+    //// Other state
+    //pipeline_descriptor.layout = null;
+    //pipeline_descriptor.depthStencil = null;
 
-    pipeline_descriptor.vertex.module = vs_module;
-    pipeline_descriptor.vertex.entryPoint = "main";
-    pipeline_descriptor.vertex.bufferCount = 0;
-    pipeline_descriptor.vertex.buffers = null;
+    //pipeline_descriptor.vertex.module = vs_module;
+    //pipeline_descriptor.vertex.entryPoint = "main";
+    //pipeline_descriptor.vertex.bufferCount = 0;
+    //pipeline_descriptor.vertex.buffers = null;
 
-    pipeline_descriptor.multisample.count = 1;
-    pipeline_descriptor.multisample.mask = 0xFFFFFFFF;
-    pipeline_descriptor.multisample.alphaToCoverageEnabled = false;
+    //pipeline_descriptor.multisample.count = 1;
+    //pipeline_descriptor.multisample.mask = 0xFFFFFFFF;
+    //pipeline_descriptor.multisample.alphaToCoverageEnabled = false;
 
-    pipeline_descriptor.primitive.frontFace = c.WGPUFrontFace_CCW;
-    pipeline_descriptor.primitive.cullMode = c.WGPUCullMode_None;
-    pipeline_descriptor.primitive.topology = c.WGPUPrimitiveTopology_TriangleList;
-    pipeline_descriptor.primitive.stripIndexFormat = c.WGPUIndexFormat_Undefined;
+    //pipeline_descriptor.primitive.frontFace = c.WGPUFrontFace_CCW;
+    //pipeline_descriptor.primitive.cullMode = c.WGPUCullMode_None;
+    //pipeline_descriptor.primitive.topology = c.WGPUPrimitiveTopology_TriangleList;
+    //pipeline_descriptor.primitive.stripIndexFormat = c.WGPUIndexFormat_Undefined;
 
-    const pipeline = c.wgpuDeviceCreateRenderPipeline(setup.device, &pipeline_descriptor);
+    const pipeline = c.wgpuDeviceCreateRenderPipeline(
+        setup.device,
+        //&pipeline_descriptor
+        &(c.WGPURenderPipelineDescriptor){
+            .nextInChain = null,
+            .label = "a render pipeline",
+            .layout = pipeline_layout,
+            .vertex = (c.WGPUVertexState){
+                .nextInChain = null,
+                .module = vs_module,
+                .entryPoint = "main",
+                .constantCount = 0,
+                .constants = null,
+                .bufferCount = 0,
+                .buffers = null,
+            },
+            .primitive = (c.WGPUPrimitiveState){
+                .nextInChain = null,
+                .topology = c.WGPUPrimitiveTopology_TriangleList,
+                .stripIndexFormat = c.WGPUIndexFormat_Undefined,
+                .frontFace = c.WGPUFrontFace_CCW,
+                .cullMode = c.WGPUCullMode_None,
+            },
+            .depthStencil = null,
+            .multisample = (c.WGPUMultisampleState){
+                .nextInChain = null,
+                .count = 1,
+                .mask = 0xFFFFFFFF,
+                .alphaToCoverageEnabled = false,
+            },
+            .fragment = &fragment,
+        },
+    );
+    defer c.wgpuRenderPipelineRelease(pipeline);
 
     c.wgpuShaderModuleRelease(vs_module);
     c.wgpuShaderModuleRelease(fs_module);
@@ -162,6 +285,7 @@ pub fn main() !void {
             .device = setup.device,
             .pipeline = pipeline,
             .queue = queue,
+            .bind_group = bind_group,
         });
         std.time.sleep(16 * std.time.ns_per_ms);
     }
@@ -180,6 +304,7 @@ const FrameParams = struct {
     device: c.WGPUDevice,
     pipeline: c.WGPURenderPipeline,
     queue: c.WGPUQueue,
+    bind_group: c.WGPUBindGroup,
 };
 
 fn isDescriptorEqual(a: c.WGPUSwapChainDescriptor, b: c.WGPUSwapChainDescriptor) bool {
@@ -217,9 +342,13 @@ fn frame(params: FrameParams) !void {
     render_pass_info.colorAttachments = &color_attachment;
     render_pass_info.depthStencilAttachment = null;
 
-    const encoder = c.wgpuDeviceCreateCommandEncoder(params.device, null);
+    const encoder = c.wgpuDeviceCreateCommandEncoder(
+        params.device,
+        &(c.WGPUCommandEncoderDescriptor){ .nextInChain = null, .label = "preview encoder" },
+    );
     const pass = c.wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_info);
     c.wgpuRenderPassEncoderSetPipeline(pass, params.pipeline);
+    c.wgpuRenderPassEncoderSetBindGroup(pass, 0, params.bind_group, 0, 0); // BIND GROUP
     c.wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
     c.wgpuRenderPassEncoderEnd(pass);
     c.wgpuRenderPassEncoderRelease(pass);
