@@ -253,3 +253,14 @@ pub fn msgSend(obj: anytype, sel_name: [:0]const u8, args: anytype, comptime Ret
 //     auto depthStencilTexture = device.CreateTexture(&descriptor);
 //     return depthStencilTexture.CreateView();
 // }
+//
+
+pub fn read_file(alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
+    const file = try std.fs.cwd().openFile(name, std.fs.File.OpenFlags{ .mode = .read_only });
+    defer file.close();
+
+    const size = try file.getEndPos();
+    const buf = try alloc.alloc(u8, size);
+    _ = try file.readAll(buf);
+    return buf;
+}

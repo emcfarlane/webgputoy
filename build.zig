@@ -122,7 +122,7 @@ pub fn linkFromBinary(_: *Builder, step: *std.build.LibExeObjStep, options: Opti
     step.linkLibCpp();
 
     step.addIncludeDir(thisDir() ++ "/libs/include");
-    step.addIncludeDir(thisDir() ++ "/libs");
+    step.addIncludeDir(thisDir() ++ "/libs"); // "extern/futureproof.h"
 
     if (options.linux_window_manager != null and options.linux_window_manager.? == .X11) {
         step.linkSystemLibrary("X11");
